@@ -136,3 +136,87 @@ def squarify(
         else:
             result.extend(squarify(child, child_rect, min_area))
     return result
+
+
+# ── Append to src/snapdiff/ui/treemap.py ──────────────────────────────────────
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QResizeEvent
+from PyQt6.QtWidgets import QWidget
+
+from snapdiff.btrfs.diff import ChangeType
+
+CHANGE_TYPE_COLORS: dict[ChangeType | None, QColor] = {
+    ChangeType.CREATED:     QColor("#4caf50"),
+    ChangeType.MODIFIED:    QColor("#ff9800"),
+    ChangeType.DELETED:     QColor("#f44336"),
+    ChangeType.RENAMED:     QColor("#2196f3"),
+    ChangeType.PERMISSIONS: QColor("#9e9e9e"),
+    None:                   QColor("#424242"),
+}
+
+
+class TreemapWidget(QWidget):
+    node_selected = pyqtSignal(str)  # emits full_path
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._root: DiffNode | None = None
+        self._layout_cache: list[tuple[DiffNode, Rect]] = []
+        self._selected_path: str | None = None
+        self.setMinimumSize(200, 200)
+
+    def set_root(self, node: DiffNode) -> None:
+        self._root = node
+        self._layout_cache = []
+        self.update()
+
+    def select_node(self, full_path: str) -> None:
+        self._selected_path = full_path
+        self.update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#1e1e1e"))
+        if self._root is None:
+            return
+
+        if not self._layout_cache:
+            bounds = Rect(0.0, 0.0, float(self.width()), float(self.height()))
+            self._layout_cache = squarify(self._root, bounds)
+
+        from PyQt6.QtCore import QRectF
+
+        for node, r in self._layout_cache:
+            color = CHANGE_TYPE_COLORS.get(node.change_type, CHANGE_TYPE_COLORS[None])
+            qr = QRectF(r.x, r.y, r.w, r.h)
+            painter.fillRect(qr, color)
+            painter.setPen(color.darker(130))
+            painter.drawRect(qr)
+
+            if node.full_path == self._selected_path:
+                painter.fillRect(qr, QColor(255, 255, 255, 60))
+
+            if r.w > 40 and r.h > 20:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                painter.setPen(QColor("white"))
+                painter.drawText(
+                    qr.adjusted(3, 3, -3, -3),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                    node.name,
+                )
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        x = float(event.position().x())
+        y = float(event.position().y())
+        for node, r in self._layout_cache:
+            if r.x <= x < r.x + r.w and r.y <= y < r.y + r.h:
+                self._selected_path = node.full_path
+                self.node_selected.emit(node.full_path)
+                self.update()
+                return
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        self._layout_cache = []
+        super().resizeEvent(event)
