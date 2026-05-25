@@ -133,3 +133,47 @@ def test_deduplicate_preserves_unrelated_records() -> None:
     ]
     result = _deduplicate(records)
     assert len(result) == 2
+
+
+from unittest.mock import patch
+
+from snapdiff.btrfs.diff import DiffError, compute_diff
+
+
+def test_compute_diff_parses_output() -> None:
+    fake_stdout = (
+        "mkfile                  path new_file.txt\n"
+        "write                   path new_file.txt offset 0 len 10\n"
+        "chmod                   path new_file.txt mode 0644\n"
+    )
+    with patch("snapdiff.utils.subprocess.pipe", return_value=(fake_stdout, 0, "", 0)):
+        records = compute_diff("/snap/base", "/snap/new")
+    # chmod + write on same path → deduplicated to MODIFIED only
+    assert len(records) == 2
+    paths = {r.path for r in records}
+    assert paths == {"new_file.txt"}
+    types = {r.change_type for r in records}
+    assert ChangeType.CREATED in types
+    assert ChangeType.MODIFIED in types
+    assert ChangeType.PERMISSIONS not in types
+
+
+def test_compute_diff_raises_diff_error_on_send_failure() -> None:
+    with patch("snapdiff.utils.subprocess.pipe", return_value=("", 1, "some btrfs error", 0)):
+        with pytest.raises(DiffError, match="btrfs send failed"):
+            compute_diff("/snap/base", "/snap/new")
+
+
+def test_compute_diff_raises_permission_error() -> None:
+    with patch(
+        "snapdiff.utils.subprocess.pipe",
+        return_value=("", 1, "ERROR: Operation not permitted", 0),
+    ):
+        with pytest.raises(PermissionError, match="root"):
+            compute_diff("/snap/base", "/snap/new")
+
+
+def test_compute_diff_raises_diff_error_on_receive_failure() -> None:
+    with patch("snapdiff.utils.subprocess.pipe", return_value=("", 0, "", 1)):
+        with pytest.raises(DiffError, match="btrfs receive"):
+            compute_diff("/snap/base", "/snap/new")

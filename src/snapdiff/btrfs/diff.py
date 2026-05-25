@@ -88,18 +88,64 @@ def _parse_line(line: str) -> ChangeRecord | None:
 
 
 def _deduplicate(records: list[ChangeRecord]) -> list[ChangeRecord]:
-    """If a path has both PERMISSIONS and MODIFIED records, keep only MODIFIED."""
-    by_path: dict[str, ChangeRecord] = {}
+    """
+    Collapse duplicate records per path:
+    - Each (path, change_type) pair is kept at most once.
+    - If a path has both PERMISSIONS and MODIFIED records, drop PERMISSIONS.
+    """
+    # Track all change types seen per path
+    by_path: dict[str, set[ChangeType]] = {}
+    order: list[ChangeRecord] = []
+    seen: set[tuple[str, ChangeType]] = set()
+
     for record in records:
-        key = record.path
-        if key not in by_path:
-            by_path[key] = record
-        else:
-            existing = by_path[key]
-            if (
-                existing.change_type == ChangeType.PERMISSIONS
-                and record.change_type == ChangeType.MODIFIED
-            ):
-                by_path[key] = record
-            # If existing is MODIFIED and new is PERMISSIONS, keep MODIFIED (no-op).
-    return list(by_path.values())
+        key = (record.path, record.change_type)
+        if key not in seen:
+            seen.add(key)
+            by_path.setdefault(record.path, set()).add(record.change_type)
+            order.append(record)
+
+    result = []
+    for record in order:
+        path_types = by_path[record.path]
+        if record.change_type == ChangeType.PERMISSIONS and ChangeType.MODIFIED in path_types:
+            continue  # drop PERMISSIONS when MODIFIED is present for same path
+        result.append(record)
+    return result
+
+
+from snapdiff.utils import subprocess as sp
+
+
+def _parse_output(stdout: str) -> list[ChangeRecord]:
+    records = []
+    for line in stdout.splitlines():
+        record = _parse_line(line)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def compute_diff(base_snapshot: str, new_snapshot: str) -> list[ChangeRecord]:
+    """
+    Run `btrfs send --no-data -p <base> <new> | btrfs receive --dump`.
+    Returns deduplicated list of ChangeRecord. Raises DiffError, PermissionError,
+    or RuntimeError (btrfs not found).
+    """
+    stdout, send_rc, send_stderr, receive_rc = sp.pipe(
+        ["btrfs", "send", "--no-data", "-p", base_snapshot, new_snapshot],
+        ["btrfs", "receive", "--dump"],
+    )
+
+    if send_rc != 0:
+        if "Operation not permitted" in send_stderr or "EPERM" in send_stderr:
+            raise PermissionError(
+                "btrfs send requires root or CAP_SYS_ADMIN. "
+                "Run the application with sudo or grant the appropriate capability."
+            )
+        raise DiffError(f"btrfs send failed (exit {send_rc}): {send_stderr.strip()}")
+
+    if receive_rc != 0:
+        raise DiffError(f"btrfs receive --dump failed (exit {receive_rc})")
+
+    return _deduplicate(_parse_output(stdout))
