@@ -2,8 +2,16 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import patch
 
-from snapdiff.btrfs.diff import ChangeRecord, ChangeType, _deduplicate, _parse_line
+from snapdiff.btrfs.diff import (
+    ChangeRecord,
+    ChangeType,
+    DiffError,
+    _deduplicate,
+    _parse_line,
+    compute_diff,
+)
 
 
 @pytest.mark.parametrize(
@@ -133,11 +141,6 @@ def test_deduplicate_preserves_unrelated_records() -> None:
     ]
     result = _deduplicate(records)
     assert len(result) == 2
-
-
-from unittest.mock import patch
-
-from snapdiff.btrfs.diff import DiffError, compute_diff
 
 
 def test_compute_diff_parses_output() -> None:

@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from snapdiff.model.diff_tree import DiffNode
+from PyQt6.QtCore import QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QResizeEvent
+from PyQt6.QtWidgets import QWidget
 
-# PyQt6 imports are added in Task 9 (widget section). Only pure types here.
+from snapdiff.btrfs.diff import ChangeType
+from snapdiff.model.diff_tree import DiffNode
 
 
 @dataclass
@@ -138,21 +141,13 @@ def squarify(
     return result
 
 
-# ── Append to src/snapdiff/ui/treemap.py ──────────────────────────────────────
-
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QResizeEvent
-from PyQt6.QtWidgets import QWidget
-
-from snapdiff.btrfs.diff import ChangeType
-
 CHANGE_TYPE_COLORS: dict[ChangeType | None, QColor] = {
-    ChangeType.CREATED:     QColor("#4caf50"),
-    ChangeType.MODIFIED:    QColor("#ff9800"),
-    ChangeType.DELETED:     QColor("#f44336"),
-    ChangeType.RENAMED:     QColor("#2196f3"),
+    ChangeType.CREATED: QColor("#4caf50"),
+    ChangeType.MODIFIED: QColor("#ff9800"),
+    ChangeType.DELETED: QColor("#f44336"),
+    ChangeType.RENAMED: QColor("#2196f3"),
     ChangeType.PERMISSIONS: QColor("#9e9e9e"),
-    None:                   QColor("#424242"),
+    None: QColor("#424242"),
 }
 
 
@@ -184,8 +179,6 @@ class TreemapWidget(QWidget):
         if not self._layout_cache:
             bounds = Rect(0.0, 0.0, float(self.width()), float(self.height()))
             self._layout_cache = squarify(self._root, bounds)
-
-        from PyQt6.QtCore import QRectF
 
         for node, r in self._layout_cache:
             color = CHANGE_TYPE_COLORS.get(node.change_type, CHANGE_TYPE_COLORS[None])

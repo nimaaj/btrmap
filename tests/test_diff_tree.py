@@ -1,10 +1,8 @@
 # tests/test_diff_tree.py
 from __future__ import annotations
 
-import pytest
-
 from snapdiff.btrfs.diff import ChangeRecord, ChangeType
-from snapdiff.model.diff_tree import DiffNode, DiffTree
+from snapdiff.model.diff_tree import DiffTree
 
 
 def _records(*args: tuple[ChangeType, str, str | None]) -> list[ChangeRecord]:

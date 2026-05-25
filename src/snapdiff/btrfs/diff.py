@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 
+from snapdiff.utils import subprocess as sp
+
 
 class ChangeType(Enum):
     CREATED = "created"
@@ -112,9 +114,6 @@ def _deduplicate(records: list[ChangeRecord]) -> list[ChangeRecord]:
             continue  # drop PERMISSIONS when MODIFIED is present for same path
         result.append(record)
     return result
-
-
-from snapdiff.utils import subprocess as sp
 
 
 def _parse_output(stdout: str) -> list[ChangeRecord]:

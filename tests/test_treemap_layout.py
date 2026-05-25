@@ -1,8 +1,6 @@
 # tests/test_treemap_layout.py
 from __future__ import annotations
 
-import pytest
-
 from snapdiff.btrfs.diff import ChangeType
 from snapdiff.model.diff_tree import DiffNode
 from snapdiff.ui.treemap import Rect, squarify
