@@ -102,7 +102,7 @@ class SnapshotSelector(QWidget):
             self._status.setText("Base and new snapshots must be different.")
             return
 
-        fs_root = self._fs_edit.text().strip().rstrip("/")
+        fs_root = os.path.normpath(self._fs_edit.text().strip() or "/")
         base_path = os.path.join(fs_root, self._subvolumes[base_idx].path)
         new_path = os.path.join(fs_root, self._subvolumes[new_idx].path)
         self._status.setText("Computing diff…")
