@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 from snapdiff.utils import subprocess as sp
 
-# btrfs subvolume list -rpo output format (with -p flag adds "parent <id>" field):
-# ID <id> gen <gen> [parent <id>] top level <lvl> path <path>
+# btrfs subvolume list -rp output format (-p adds "parent <id>" field):
+# ID <id> gen <gen> parent <id> top level <lvl> path <path>
 _SUBVOL_RE = re.compile(
     r"ID\s+(\d+)\s+gen\s+(\d+)(?:\s+parent\s+\d+)?\s+top level\s+\d+\s+path\s+(.+)$"
 )
@@ -33,7 +33,7 @@ def list_subvolumes(fs_path: str) -> list[Subvolume]:
     Raises SubvolumeListError on non-zero exit.
     Raises RuntimeError if btrfs is not on PATH.
     """
-    result = sp.run(["btrfs", "subvolume", "list", "-rpo", fs_path])
+    result = sp.run(["btrfs", "subvolume", "list", "-rp", fs_path])
     if result.returncode != 0:
         raise SubvolumeListError(
             f"btrfs subvolume list failed (exit {result.returncode}): {result.stderr.strip()}"
