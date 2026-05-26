@@ -72,6 +72,12 @@ class SnapshotSelector(QWidget):
             self._status.setText(f"Error: {exc}")
             return
 
+        # Filter out paths that belong to a different subvolume (start with @xxx/).
+        # e.g. when fs_root="/", "@home/.snapshots/…" is not accessible there.
+        # Those snapshots appear correctly when the user sets fs_root to their mount point.
+        accessible = [sv for sv in self._subvolumes if not sv.path.startswith("@")]
+        self._subvolumes = accessible
+
         self._base_combo.clear()
         self._new_combo.clear()
         for sv in self._subvolumes:
@@ -79,7 +85,8 @@ class SnapshotSelector(QWidget):
             self._new_combo.addItem(sv.path)
         if len(self._subvolumes) >= 2:
             self._new_combo.setCurrentIndex(1)
-        self._status.setText(f"Found {len(self._subvolumes)} read-only subvolume(s).")
+        n = len(self._subvolumes)
+        self._status.setText(f"Found {n} snapshot(s). (Use '/home' as root for @home snapshots.)" if n else "No snapshots found.")
 
     def _on_compare(self) -> None:
         base_idx = self._base_combo.currentIndex()

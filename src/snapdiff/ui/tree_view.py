@@ -9,10 +9,10 @@ from snapdiff.btrfs.diff import ChangeType
 from snapdiff.model.diff_tree import DiffNode, DiffTree
 
 _CHANGE_COLORS: dict[ChangeType, QColor] = {
-    ChangeType.CREATED:     QColor("#4caf50"),
-    ChangeType.MODIFIED:    QColor("#ff9800"),
-    ChangeType.DELETED:     QColor("#f44336"),
-    ChangeType.RENAMED:     QColor("#2196f3"),
+    ChangeType.CREATED: QColor("#4caf50"),
+    ChangeType.MODIFIED: QColor("#ff9800"),
+    ChangeType.DELETED: QColor("#f44336"),
+    ChangeType.RENAMED: QColor("#2196f3"),
     ChangeType.PERMISSIONS: QColor("#9e9e9e"),
 }
 
@@ -73,7 +73,9 @@ class DiffTreeModel(QAbstractItemModel):
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 3
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+    def headerData(
+        self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole
+    ):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return self.HEADERS[section]
         return None

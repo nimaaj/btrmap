@@ -6,17 +6,17 @@ from dataclasses import dataclass
 
 from snapdiff.utils import subprocess as sp
 
-# btrfs subvolume list -rpo output format:
-# ID <id> gen <gen> top level <lvl> [parent_uuid <uuid>] path <path>
+# btrfs subvolume list -rpo output format (with -p flag adds "parent <id>" field):
+# ID <id> gen <gen> [parent <id>] top level <lvl> path <path>
 _SUBVOL_RE = re.compile(
-    r"ID\s+(\d+)\s+gen\s+(\d+)\s+top level\s+\d+\s+(?:parent_uuid\s+\S+\s+)?path\s+(.+)$"
+    r"ID\s+(\d+)\s+gen\s+(\d+)(?:\s+parent\s+\d+)?\s+top level\s+\d+\s+path\s+(.+)$"
 )
 
 
 @dataclass(frozen=True)
 class Subvolume:
     id: int
-    path: str          # path relative to filesystem root
+    path: str  # path relative to filesystem root
     mount_point: str | None
     is_readonly: bool
     generation: int
