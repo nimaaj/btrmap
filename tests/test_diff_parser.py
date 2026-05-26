@@ -143,13 +143,27 @@ def test_deduplicate_preserves_unrelated_records() -> None:
     assert len(result) == 2
 
 
+def _make_streaming_mock(lines: str, send_rc: int = 0, send_stderr: str = "", receive_rc: int = 0):
+    """Return a side_effect for pipe_streaming that feeds lines to the callback."""
+
+    def _fake(first, second, line_callback):
+        for line in lines.splitlines(keepends=True):
+            line_callback(line)
+        return send_rc, send_stderr, receive_rc
+
+    return _fake
+
+
 def test_compute_diff_parses_output() -> None:
     fake_stdout = (
         "mkfile                  path new_file.txt\n"
         "write                   path new_file.txt offset 0 len 10\n"
         "chmod                   path new_file.txt mode 0644\n"
     )
-    with patch("snapdiff.utils.subprocess.pipe", return_value=(fake_stdout, 0, "", 0)):
+    with patch(
+        "snapdiff.utils.subprocess.pipe_streaming",
+        side_effect=_make_streaming_mock(fake_stdout),
+    ):
         records = compute_diff("/snap/base", "/snap/new")
     # chmod + write on same path → deduplicated to MODIFIED only
     assert len(records) == 2
@@ -162,21 +176,27 @@ def test_compute_diff_parses_output() -> None:
 
 
 def test_compute_diff_raises_diff_error_on_send_failure() -> None:
-    with patch("snapdiff.utils.subprocess.pipe", return_value=("", 1, "some btrfs error", 0)):
+    with patch(
+        "snapdiff.utils.subprocess.pipe_streaming",
+        side_effect=_make_streaming_mock("", send_rc=1, send_stderr="some btrfs error"),
+    ):
         with pytest.raises(DiffError, match="btrfs send failed"):
             compute_diff("/snap/base", "/snap/new")
 
 
 def test_compute_diff_raises_permission_error() -> None:
     with patch(
-        "snapdiff.utils.subprocess.pipe",
-        return_value=("", 1, "ERROR: Operation not permitted", 0),
+        "snapdiff.utils.subprocess.pipe_streaming",
+        side_effect=_make_streaming_mock("", send_rc=1, send_stderr="ERROR: Operation not permitted"),
     ):
         with pytest.raises(PermissionError, match="root"):
             compute_diff("/snap/base", "/snap/new")
 
 
 def test_compute_diff_raises_diff_error_on_receive_failure() -> None:
-    with patch("snapdiff.utils.subprocess.pipe", return_value=("", 0, "", 1)):
+    with patch(
+        "snapdiff.utils.subprocess.pipe_streaming",
+        side_effect=_make_streaming_mock("", receive_rc=1),
+    ):
         with pytest.raises(DiffError, match="btrfs receive"):
             compute_diff("/snap/base", "/snap/new")

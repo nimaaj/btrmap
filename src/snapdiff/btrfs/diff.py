@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -116,24 +117,35 @@ def _deduplicate(records: list[ChangeRecord]) -> list[ChangeRecord]:
     return result
 
 
-def _parse_output(stdout: str) -> list[ChangeRecord]:
-    records = []
-    for line in stdout.splitlines():
-        record = _parse_line(line)
-        if record is not None:
-            records.append(record)
-    return records
-
-
-def compute_diff(base_snapshot: str, new_snapshot: str) -> list[ChangeRecord]:
+def compute_diff(
+    base_snapshot: str,
+    new_snapshot: str,
+    *,
+    progress_cb: Callable[[int], None] | None = None,
+) -> list[ChangeRecord]:
     """
     Run `btrfs send --no-data -p <base> <new> | btrfs receive --dump`.
     Returns deduplicated list of ChangeRecord. Raises DiffError, PermissionError,
     or RuntimeError (btrfs not found).
+
+    progress_cb(n) is called every 50 parsed records with the running count.
     """
-    stdout, send_rc, send_stderr, receive_rc = sp.pipe(
+    records: list[ChangeRecord] = []
+    count = 0
+
+    def _on_line(line: str) -> None:
+        nonlocal count
+        record = _parse_line(line)
+        if record is not None:
+            records.append(record)
+            count += 1
+            if progress_cb is not None and count % 50 == 0:
+                progress_cb(count)
+
+    send_rc, send_stderr, receive_rc = sp.pipe_streaming(
         ["btrfs", "send", "--no-data", "-p", base_snapshot, new_snapshot],
         ["btrfs", "receive", "--dump"],
+        _on_line,
     )
 
     if send_rc != 0:
@@ -147,4 +159,4 @@ def compute_diff(base_snapshot: str, new_snapshot: str) -> list[ChangeRecord]:
     if receive_rc != 0:
         raise DiffError(f"btrfs receive --dump failed (exit {receive_rc})")
 
-    return _deduplicate(_parse_output(stdout))
+    return _deduplicate(records)

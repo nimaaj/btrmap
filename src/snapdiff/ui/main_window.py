@@ -5,6 +5,7 @@ from PyQt6.QtCore import QSettings, QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -21,6 +22,7 @@ from snapdiff.ui.treemap import TreemapWidget
 class DiffWorker(QThread):
     finished: pyqtSignal = pyqtSignal(object)  # emits DiffTree
     error: pyqtSignal = pyqtSignal(Exception)
+    progress: pyqtSignal = pyqtSignal(str)  # human-readable status message
 
     def __init__(self, base_path: str, new_path: str, parent=None) -> None:
         super().__init__(parent)
@@ -29,9 +31,23 @@ class DiffWorker(QThread):
 
     def run(self) -> None:
         try:
-            records = compute_diff(self._base, self._new)
+            self.progress.emit("Step 1/3  Running btrfs diff…")
+
+            def diff_progress(n: int) -> None:
+                self.progress.emit(f"Step 1/3  Scanning… {n:,} changes found")
+
+            records = compute_diff(self._base, self._new, progress_cb=diff_progress)
+
+            self.progress.emit(f"Step 2/3  Building tree ({len(records):,} changes)…")
             tree = DiffTree.build(records)
-            enrich(tree, self._new, self._base)
+
+            n_leaves = sum(1 for _ in tree.iter_leaves())
+            self.progress.emit(f"Step 3/3  Measuring sizes ({n_leaves:,} files)…")
+
+            def enrich_progress(n: int) -> None:
+                self.progress.emit(f"Step 3/3  Measuring sizes… {n:,}/{n_leaves:,}")
+
+            enrich(tree, self._new, self._base, progress_cb=enrich_progress)
             self.finished.emit(tree)
         except Exception as exc:  # noqa: BLE001
             self.error.emit(exc)
@@ -65,6 +81,15 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.statusBar().showMessage("Ready — load snapshots and click Compare.")
 
+        # Busy indicator (indeterminate progress bar in the status bar)
+        self._busy_bar = QProgressBar()
+        self._busy_bar.setRange(0, 0)  # indeterminate / bouncing
+        self._busy_bar.setFixedWidth(160)
+        self._busy_bar.setFixedHeight(16)
+        self._busy_bar.setTextVisible(False)
+        self.statusBar().addPermanentWidget(self._busy_bar)
+        self._busy_bar.hide()
+
         # Restore splitter state
         settings = QSettings("btrfs-snapdiff", "main")
         if settings.contains("splitter"):
@@ -83,9 +108,12 @@ class MainWindow(QMainWindow):
         self._worker = DiffWorker(base_path, new_path, self)
         self._worker.finished.connect(self._on_diff_finished)
         self._worker.error.connect(self._on_diff_error)
+        self._worker.progress.connect(self.statusBar().showMessage)
+        self._busy_bar.show()
         self._worker.start()
 
     def _on_diff_finished(self, tree: DiffTree) -> None:
+        self._busy_bar.hide()
         self._tree_view.set_tree(tree)
         self._treemap.set_root(tree.root)
         n_leaves = sum(1 for _ in tree.iter_leaves())
@@ -94,6 +122,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_diff_error(self, exc: Exception) -> None:
+        self._busy_bar.hide()
         msg = str(exc)
         self.statusBar().showMessage(f"Error: {msg}")
         QMessageBox.critical(self, "Diff failed", msg)
