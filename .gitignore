@@ -25,3 +25,8 @@ tests/output/
 # Environment files
 .env
 .env.local
+
+# Project-internal docs (Claude instructions and spec — not for public repo)
+CLAUDE.md
+btrfs_snapdiff_spec.md
+docs/superpowers/

@@ -160,9 +160,9 @@ class SnapshotSelector(QWidget):
                 if text.endswith(suffix):
                     text = text[: -len(suffix)]
                     break
-            # Reset appearance — leave foreground at the default theme colour
+            # Reset to system-default foreground and transparent background
             item.setBackground(QBrush(Qt.GlobalColor.transparent))
-            item.setForeground(QBrush(Qt.GlobalColor.transparent))
+            item.setData(Qt.ItemDataRole.ForegroundRole, None)  # clears custom colour
 
             if row == self._base_row:
                 item.setText(text + _SUFFIX_BASE)
