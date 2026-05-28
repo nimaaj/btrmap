@@ -1,4 +1,10 @@
-# src/snapdiff/btrfs/diff.py
+"""Parse ``btrfs receive --dump`` output into typed change records.
+
+Handles both the legacy btrfs-progs format (``path foo/bar key value``) and the
+modern 6.x format (``./snapshot/foo/bar key=value``).  The public entry point is
+:func:`compute_diff`, which runs the btrfs send/receive pipeline and returns a
+deduplicated list of :class:`ChangeRecord` objects.
+"""
 from __future__ import annotations
 
 import re
@@ -6,10 +12,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
-from snapdiff.utils import subprocess as sp
+from btrmap.utils import subprocess as sp
 
 
 class ChangeType(Enum):
+    """The kind of change a btrfs operation represents at the file level."""
+
     CREATED = "created"
     MODIFIED = "modified"
     DELETED = "deleted"
@@ -19,13 +27,19 @@ class ChangeType(Enum):
 
 @dataclass
 class ChangeRecord:
+    """A single file-system change parsed from ``btrfs receive --dump`` output.
+
+    For RENAMED records, ``old_path`` holds the source path and ``path`` holds
+    the destination.  For all other types, ``old_path`` is ``None``.
+    """
+
     change_type: ChangeType
     path: str
     old_path: str | None = field(default=None)
 
 
 class DiffError(Exception):
-    pass
+    """Raised when the ``btrfs send`` or ``btrfs receive`` subprocess fails."""
 
 
 _TOKEN_MAP: dict[str, ChangeType] = {
@@ -46,19 +60,36 @@ _TOKEN_MAP: dict[str, ChangeType] = {
     "set_xattr": ChangeType.PERMISSIONS,
 }
 
-# Subsequent field keywords that terminate a path in btrfs receive --dump output.
+# Field keywords that terminate a path in btrfs receive --dump output.
+# Supports both old format ("offset 0") and new format ("offset=0").
 _TRAILING_FIELD_RE = re.compile(
     r"\s+(?:offset|len|dest|mode|dev|uid|gid|atime|mtime|ctime|size|name|data|"
-    r"clone_offset|from|root)\s+"
+    r"clone_offset|from|root|uuid|transid|parent_uuid|parent_transid|to)"
+    r"(?=[=\s])"  # look-ahead: followed by = (new) or whitespace (old)
 )
 
 
 def _extract_path(text: str) -> str:
-    """Strip trailing 'keyword value' pairs from a path string."""
+    """Strip trailing 'keyword value' or 'keyword=value' pairs from a path string."""
     m = _TRAILING_FIELD_RE.search(text)
     if m:
         return text[: m.start()].strip()
     return text.strip()
+
+
+def _strip_subvol_prefix(path: str) -> str:
+    """Strip the leading './' and subvolume-name component from a btrfs dump path.
+
+    Real btrfs receive --dump output uses paths like ``./snapshot/usr/bin/find``
+    where ``snapshot`` is the subvolume name set by snapper. We strip that prefix
+    to get the subvolume-relative path ``usr/bin/find``.
+    """
+    if path.startswith("./"):
+        path = path[2:]
+    slash = path.find("/")
+    if slash >= 0:
+        return path[slash + 1 :]
+    return ""  # path was the subvolume root itself (e.g. "./snapshot")
 
 
 def _parse_line(line: str) -> ChangeRecord | None:
@@ -76,18 +107,39 @@ def _parse_line(line: str) -> ChangeRecord | None:
     if change_type is None:
         return None
 
-    if not rest.startswith("path "):
-        return None
-
-    path_and_rest = rest[5:]  # strip leading "path "
+    # Support both:
+    #   old format: "path foo/bar.txt offset 0 len 1024"
+    #   new format: "./snapshot/foo/bar.txt offset=0 len=1024"
+    if rest.startswith("path "):
+        path_and_rest = rest[5:]
+        strip_prefix = False
+    else:
+        path_and_rest = rest
+        strip_prefix = True
 
     if change_type == ChangeType.RENAMED:
-        if " -> " not in path_and_rest:
-            return None
-        old_path, new_path = path_and_rest.split(" -> ", 1)
-        return ChangeRecord(ChangeType.RENAMED, new_path.strip(), old_path=old_path.strip())
+        # Old format: "path oldname.txt -> newname.txt"
+        if " -> " in path_and_rest:
+            old_path, new_path = path_and_rest.split(" -> ", 1)
+            return ChangeRecord(ChangeType.RENAMED, new_path.strip(), old_path=old_path.strip())
+        # New format: "./snapshot/old.txt to=./snapshot/new.txt"
+        to_match = re.search(r"\bto=(\S+)", path_and_rest)
+        if to_match:
+            old_raw = _extract_path(path_and_rest)
+            new_raw = to_match.group(1)
+            old_p = _strip_subvol_prefix(old_raw) if old_raw.startswith("./") else old_raw
+            new_p = _strip_subvol_prefix(new_raw) if new_raw.startswith("./") else new_raw
+            if not old_p or not new_p:
+                return None
+            return ChangeRecord(ChangeType.RENAMED, new_p, old_path=old_p)
+        return None
 
-    return ChangeRecord(change_type, _extract_path(path_and_rest))
+    raw_path = _extract_path(path_and_rest)
+    path = _strip_subvol_prefix(raw_path) if strip_prefix and raw_path.startswith("./") else raw_path
+    if not path:
+        return None
+
+    return ChangeRecord(change_type, path)
 
 
 def _deduplicate(records: list[ChangeRecord]) -> list[ChangeRecord]:

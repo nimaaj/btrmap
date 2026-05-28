@@ -1,18 +1,26 @@
-# src/snapdiff/ui/treemap.py
+"""Squarified treemap widget for visualising snapshot diff sizes by file.
+
+:func:`squarify` is a pure function (Bruls et al. 2000 algorithm) that returns
+``(DiffNode, Rect)`` pairs — no Qt dependency, fully unit-testable.
+:class:`TreemapWidget` caches the computed layout and recomputes it only on
+:meth:`~TreemapWidget.set_root` or widget resize.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QResizeEvent
+from PyQt6.QtGui import QColor, QFont, QPainter, QResizeEvent
 from PyQt6.QtWidgets import QWidget
 
-from snapdiff.btrfs.diff import ChangeType
-from snapdiff.model.diff_tree import DiffNode
+from btrmap.btrfs.diff import ChangeType
+from btrmap.model.diff_tree import DiffNode
 
 
 @dataclass
 class Rect:
+    """Axis-aligned rectangle used by the squarify layout algorithm."""
+
     x: float
     y: float
     w: float
@@ -131,7 +139,7 @@ def squarify(
     child_rects = _squarify_rects(areas, rect)
 
     result: list[tuple[DiffNode, Rect]] = []
-    for child, child_rect in zip(children, child_rects):
+    for child, child_rect in zip(children, child_rects, strict=True):
         if child_rect.w * child_rect.h < min_area:
             continue
         if child.is_leaf:
@@ -150,8 +158,37 @@ CHANGE_TYPE_COLORS: dict[ChangeType | None, QColor] = {
     None: QColor("#424242"),
 }
 
+# Human-readable labels used in the on-canvas legend
+_CHANGE_LABELS: dict[ChangeType | None, str] = {
+    ChangeType.CREATED: "Created",
+    ChangeType.MODIFIED: "Modified",
+    ChangeType.DELETED: "Deleted",
+    ChangeType.RENAMED: "Renamed",
+    ChangeType.PERMISSIONS: "Permissions",
+}
+
+# Semi-transparent black used for cell borders — colour-agnostic, so adjacent
+# cells of the same type still visually separate.
+_BORDER_COLOR = QColor(0, 0, 0, 100)
+_SELECTION_OVERLAY = QColor(255, 255, 255, 70)
+
+
+def _fmt_size(n: int) -> str:
+    """Format byte count as human-readable string."""
+    for unit in ("B", "K", "M", "G"):
+        if n < 1024:
+            return f"{n}{unit}"
+        n //= 1024
+    return f"{n}T"
+
 
 class TreemapWidget(QWidget):
+    """Canvas widget that renders a squarified treemap of a :class:`~btrmap.model.diff_tree.DiffNode` subtree.
+
+    Click a cell to select that node (emits :attr:`node_selected`).  The layout is
+    cached until the root changes or the widget is resized.
+    """
+
     node_selected = pyqtSignal(str)  # emits full_path
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -172,6 +209,7 @@ class TreemapWidget(QWidget):
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor("#1e1e1e"))
         if self._root is None:
             return
@@ -180,25 +218,105 @@ class TreemapWidget(QWidget):
             bounds = Rect(0.0, 0.0, float(self.width()), float(self.height()))
             self._layout_cache = squarify(self._root, bounds)
 
+        # ── Draw cells ────────────────────────────────────────────────────────
         for node, r in self._layout_cache:
             color = CHANGE_TYPE_COLORS.get(node.change_type, CHANGE_TYPE_COLORS[None])
-            qr = QRectF(r.x, r.y, r.w, r.h)
+            qr = QRectF(r.x + 0.5, r.y + 0.5, r.w - 1.0, r.h - 1.0)
+
             painter.fillRect(qr, color)
-            painter.setPen(color.darker(130))
+
+            # Universal semi-transparent dark border — separates cells of the
+            # same colour cleanly without a hue shift.
+            painter.setPen(_BORDER_COLOR)
             painter.drawRect(qr)
 
+            # Selection highlight
             if node.full_path == self._selected_path:
-                painter.fillRect(qr, QColor(255, 255, 255, 60))
+                painter.fillRect(qr, _SELECTION_OVERLAY)
 
-            if r.w > 40 and r.h > 20:
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            # Label: filename on line 1; size on line 2 when space allows
+            if r.w > 44 and r.h > 18:
+                inner = qr.adjusted(3, 3, -3, -3)
                 painter.setPen(QColor("white"))
-                painter.drawText(
-                    qr.adjusted(3, 3, -3, -3),
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                    node.name,
-                )
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+                if r.h > 36 and r.w > 60:
+                    # Two-line label: name + size
+                    name_rect = QRectF(inner.x(), inner.y(), inner.width(), inner.height() / 2)
+                    size_rect = QRectF(
+                        inner.x(), inner.y() + inner.height() / 2,
+                        inner.width(), inner.height() / 2,
+                    )
+                    painter.drawText(
+                        name_rect,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
+                        node.name,
+                    )
+                    small = QFont(painter.font())
+                    small.setPointSizeF(max(small.pointSizeF() - 1.5, 6.0))
+                    painter.setFont(small)
+                    painter.setPen(QColor(220, 220, 220))
+                    painter.drawText(
+                        size_rect,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                        _fmt_size(node.size_bytes),
+                    )
+                    painter.setFont(QFont())  # reset
+                else:
+                    # Single-line: filename only
+                    painter.drawText(
+                        inner,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                        node.name,
+                    )
+
+        # ── Colour legend (bottom-right corner) ───────────────────────────────
+        self._draw_legend(painter)
+
+    def _draw_legend(self, painter: QPainter) -> None:
+        """Draw a compact colour legend anchored to the bottom-right corner."""
+        items = [
+            (ChangeType.CREATED, _CHANGE_LABELS[ChangeType.CREATED]),
+            (ChangeType.MODIFIED, _CHANGE_LABELS[ChangeType.MODIFIED]),
+            (ChangeType.DELETED, _CHANGE_LABELS[ChangeType.DELETED]),
+            (ChangeType.PERMISSIONS, _CHANGE_LABELS[ChangeType.PERMISSIONS]),
+            (ChangeType.RENAMED, _CHANGE_LABELS[ChangeType.RENAMED]),
+        ]
+
+        swatch = 10  # colour square side length (px)
+        row_h = 14   # height per legend row
+        pad = 6
+        text_w = 80
+        legend_w = pad + swatch + 4 + text_w + pad
+        legend_h = pad + len(items) * row_h + pad
+
+        lx = float(self.width() - legend_w - 4)
+        ly = float(self.height() - legend_h - 4)
+
+        # Semi-transparent background
+        painter.fillRect(QRectF(lx, ly, legend_w, legend_h), QColor(0, 0, 0, 160))
+        painter.setPen(QColor(80, 80, 80))
+        painter.drawRect(QRectF(lx, ly, legend_w, legend_h))
+
+        small_font = QFont(painter.font())
+        small_font.setPointSizeF(max(small_font.pointSizeF() - 1.5, 6.5))
+        painter.setFont(small_font)
+
+        for i, (ct, label) in enumerate(items):
+            ry = ly + pad + i * row_h
+            color = CHANGE_TYPE_COLORS[ct]
+            # Swatch
+            painter.fillRect(QRectF(lx + pad, ry + 1, swatch, swatch), color)
+            painter.setPen(_BORDER_COLOR)
+            painter.drawRect(QRectF(lx + pad, ry + 1, swatch, swatch))
+            # Label
+            painter.setPen(QColor("white"))
+            painter.drawText(
+                QRectF(lx + pad + swatch + 4, ry, text_w, row_h),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                label,
+            )
+
+        painter.setFont(QFont())  # reset
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
         x = float(event.position().x())

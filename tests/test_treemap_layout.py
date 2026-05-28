@@ -1,9 +1,9 @@
-# tests/test_treemap_layout.py
+"""Tests for squarify(): all rects within bounds, no overlaps, area proportional to size, zero-size handling."""
 from __future__ import annotations
 
-from snapdiff.btrfs.diff import ChangeType
-from snapdiff.model.diff_tree import DiffNode
-from snapdiff.ui.treemap import Rect, squarify
+from btrmap.btrfs.diff import ChangeType
+from btrmap.model.diff_tree import DiffNode
+from btrmap.ui.treemap import Rect, squarify
 
 
 def _leaf(name: str, size: int) -> DiffNode:
@@ -67,7 +67,7 @@ def test_area_proportional_to_size() -> None:
     total_size = sum(sizes)
     total_area = BOUNDS.w * BOUNDS.h
     assert len(result) == len(sizes)
-    for (node, r), size in zip(result, sizes):
+    for (node, r), size in zip(result, sizes, strict=True):
         expected = size * total_area / total_size
         actual = r.w * r.h
         rel_err = abs(actual - expected) / expected

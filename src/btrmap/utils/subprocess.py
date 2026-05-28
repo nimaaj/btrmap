@@ -1,4 +1,10 @@
-# src/snapdiff/utils/subprocess.py
+"""Thin subprocess wrappers — the only module in the project that imports ``subprocess``.
+
+All btrfs CLI invocations go through :func:`run` or :func:`pipe_streaming`.  Both
+helpers verify that the requested binary exists and raise :exc:`RuntimeError` with
+a human-readable install hint rather than letting Python surface a raw
+:exc:`FileNotFoundError`.
+"""
 from __future__ import annotations
 
 import shutil

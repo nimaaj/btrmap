@@ -1,8 +1,8 @@
-# tests/test_diff_tree.py
+"""Tests for DiffTree.build(): parent-child structure, total_size aggregation, RENAMED expansion."""
 from __future__ import annotations
 
-from snapdiff.btrfs.diff import ChangeRecord, ChangeType
-from snapdiff.model.diff_tree import DiffTree
+from btrmap.btrfs.diff import ChangeRecord, ChangeType
+from btrmap.model.diff_tree import DiffTree
 
 
 def _records(*args: tuple[ChangeType, str, str | None]) -> list[ChangeRecord]:

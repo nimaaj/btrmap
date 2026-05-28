@@ -1,11 +1,11 @@
-# tests/test_enrichment.py
+"""Tests for the enrichment layer: correct snapshot mount selection and silent stat-failure handling."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from snapdiff.btrfs.diff import ChangeRecord, ChangeType
-from snapdiff.model.diff_tree import DiffTree
-from snapdiff.model.enrichment import enrich
+from btrmap.btrfs.diff import ChangeRecord, ChangeType
+from btrmap.model.diff_tree import DiffTree
+from btrmap.model.enrichment import enrich
 
 
 def _make_tree(*records: ChangeRecord) -> DiffTree:

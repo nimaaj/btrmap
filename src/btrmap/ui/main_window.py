@@ -1,7 +1,14 @@
-# src/snapdiff/ui/main_window.py
+"""Top-level application window: wires all widgets together and manages the diff lifecycle.
+
+The diff runs in a background :class:`DiffWorker` (QThread) so the UI stays responsive
+during the btrfs send/receive pipeline.  Filter changes are applied synchronously in the
+main thread because :func:`~btrmap.model.filter.apply_filter` is fast enough not to
+require a worker.
+"""
 from __future__ import annotations
 
-from PyQt6.QtCore import QSettings, QThread, Qt, pyqtSignal
+from PyQt6.QtCore import QSettings, Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
@@ -11,15 +18,25 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from snapdiff.btrfs.diff import compute_diff
-from snapdiff.model.diff_tree import DiffTree
-from snapdiff.model.enrichment import enrich
-from snapdiff.ui.snapshot_selector import SnapshotSelector
-from snapdiff.ui.tree_view import DiffTreeView, _fmt_size
-from snapdiff.ui.treemap import TreemapWidget
+from btrmap.btrfs.diff import compute_diff
+from btrmap.model.diff_tree import DiffTree
+from btrmap.model.enrichment import enrich
+from btrmap.model.filter import FilterSpec, apply_filter, count_leaves
+from btrmap.ui.filter_panel import FilterPanel
+from btrmap.ui.snapshot_selector import SnapshotSelector
+from btrmap.ui.tree_view import DiffTreeView, _fmt_size
+from btrmap.ui.treemap import TreemapWidget
 
 
 class DiffWorker(QThread):
+    """Background thread that runs the three-phase diff pipeline.
+
+    Phases: (1) ``btrfs send | btrfs receive --dump`` → raw records,
+    (2) :meth:`~btrmap.model.diff_tree.DiffTree.build` → tree,
+    (3) :func:`~btrmap.model.enrichment.enrich` → file sizes.
+    Progress messages are emitted after each phase and periodically within phases.
+    """
+
     finished: pyqtSignal = pyqtSignal(object)  # emits DiffTree
     error: pyqtSignal = pyqtSignal(Exception)
     progress: pyqtSignal = pyqtSignal(str)  # human-readable status message
@@ -54,16 +71,20 @@ class DiffWorker(QThread):
 
 
 class MainWindow(QMainWindow):
+    """Top-level window: snapshot selector → filter bar → tree view + treemap."""
+
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("btrfs-snapdiff")
+        self.setWindowTitle("btrmap")
         self.resize(1200, 800)
 
         self._syncing = False
         self._worker: DiffWorker | None = None
+        self._current_tree: DiffTree | None = None  # unfiltered tree from last diff
 
         # Widgets
         self._selector = SnapshotSelector()
+        self._filter_panel = FilterPanel()
         self._tree_view = DiffTreeView()
         self._treemap = TreemapWidget()
 
@@ -76,7 +97,9 @@ class MainWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
         layout.addWidget(self._selector)
+        layout.addWidget(self._filter_panel)   # filter bar between selector and views
         layout.addWidget(self._splitter, stretch=1)
         self.setCentralWidget(central)
         self.statusBar().showMessage("Ready — load snapshots and click Compare.")
@@ -91,14 +114,25 @@ class MainWindow(QMainWindow):
         self._busy_bar.hide()
 
         # Restore splitter state
-        settings = QSettings("btrfs-snapdiff", "main")
+        settings = QSettings("btrmap", "main")
         if settings.contains("splitter"):
             self._splitter.restoreState(settings.value("splitter"))  # type: ignore[arg-type]
 
+        # Ctrl+F → focus path search; Ctrl+R → reset all filters
+        QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(
+            self._filter_panel.focus_search
+        )
+        QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(
+            self._filter_panel.reset
+        )
+
         # Wire signals
         self._selector.diff_requested.connect(self._start_diff)
+        self._filter_panel.filter_changed.connect(self._on_filter_changed)
         self._tree_view.node_selected.connect(self._on_node_selected)
         self._treemap.node_selected.connect(self._on_node_selected)
+
+    # ── Diff lifecycle ────────────────────────────────────────────────────────
 
     def _start_diff(self, base_path: str, new_path: str) -> None:
         if self._worker and self._worker.isRunning():
@@ -114,18 +148,38 @@ class MainWindow(QMainWindow):
 
     def _on_diff_finished(self, tree: DiffTree) -> None:
         self._busy_bar.hide()
-        self._tree_view.set_tree(tree)
-        self._treemap.set_root(tree.root)
-        n_leaves = sum(1 for _ in tree.iter_leaves())
-        self.statusBar().showMessage(
-            f"{n_leaves} change(s) · {_fmt_size(tree.root.total_size)} total"
-        )
+        self._current_tree = tree
+        self._filter_panel.set_enabled(True)
+        # reset() fires filter_changed → _on_filter_changed → _apply_and_display
+        self._filter_panel.reset()
 
     def _on_diff_error(self, exc: Exception) -> None:
         self._busy_bar.hide()
         msg = str(exc)
         self.statusBar().showMessage(f"Error: {msg}")
         QMessageBox.critical(self, "Diff failed", msg)
+
+    # ── Filtering ─────────────────────────────────────────────────────────────
+
+    def _on_filter_changed(self, spec: FilterSpec) -> None:
+        if self._current_tree is not None:
+            self._apply_and_display()
+
+    def _apply_and_display(self) -> None:
+        assert self._current_tree is not None
+        spec = self._filter_panel.current_spec()
+        filtered = apply_filter(self._current_tree.root, spec)
+        total = sum(1 for _ in self._current_tree.iter_leaves())
+        shown = count_leaves(filtered)
+        # Wrap filtered DiffNode in a DiffTree so set_tree() works unchanged.
+        # DiffTree is a plain @dataclass — wrapping a filtered root is always safe.
+        self._tree_view.set_tree(DiffTree(root=filtered))
+        self._treemap.set_root(filtered)
+        self.statusBar().showMessage(
+            f"{shown} of {total} change(s) shown · {_fmt_size(filtered.total_size)} total"
+        )
+
+    # ── Cross-widget node selection ───────────────────────────────────────────
 
     def _on_node_selected(self, full_path: str) -> None:
         if self._syncing:
@@ -136,6 +190,6 @@ class MainWindow(QMainWindow):
         self._syncing = False
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        settings = QSettings("btrfs-snapdiff", "main")
+        settings = QSettings("btrmap", "main")
         settings.setValue("splitter", self._splitter.saveState())
         super().closeEvent(event)

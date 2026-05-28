@@ -1,10 +1,12 @@
-# tests/test_diff_parser.py
+"""Tests for btrfs receive --dump line parsing: all operation tokens, spaces, Unicode,
+both legacy (``path foo/bar``) and modern (``./snapshot/foo/bar key=value``) formats."""
 from __future__ import annotations
 
-import pytest
 from unittest.mock import patch
 
-from snapdiff.btrfs.diff import (
+import pytest
+
+from btrmap.btrfs.diff import (
     ChangeRecord,
     ChangeType,
     DiffError,
@@ -101,10 +103,42 @@ from snapdiff.btrfs.diff import (
             "mkfile                  path données/résumé.pdf",
             ChangeRecord(ChangeType.CREATED, "données/résumé.pdf"),
         ),
+        # ── Real btrfs receive --dump format (no "path " keyword, key=value) ──
+        # Paths are prefixed with "./snapshot/" (snapper's subvolume name).
+        (
+            "write           ./snapshot/usr/lib/foo.so      offset=0 len=4096",
+            ChangeRecord(ChangeType.MODIFIED, "usr/lib/foo.so"),
+        ),
+        (
+            "mkfile          ./snapshot/home/user/newfile.txt",
+            ChangeRecord(ChangeType.CREATED, "home/user/newfile.txt"),
+        ),
+        (
+            "unlink          ./snapshot/old_file.txt",
+            ChangeRecord(ChangeType.DELETED, "old_file.txt"),
+        ),
+        (
+            "utimes          ./snapshot/usr/bin/find         atime=2026-05-26T08:59:59-0400 mtime=2025-07-02T12:26:17-0400 ctime=2025-09-03T13:00:59-0400",
+            ChangeRecord(ChangeType.PERMISSIONS, "usr/bin/find"),
+        ),
+        (
+            "chmod           ./snapshot/file.sh              mode=0755",
+            ChangeRecord(ChangeType.PERMISSIONS, "file.sh"),
+        ),
+        (
+            "rename          ./snapshot/old.txt              to=./snapshot/new.txt",
+            ChangeRecord(ChangeType.RENAMED, "new.txt", old_path="old.txt"),
+        ),
+        # Snapshot root entry → None (empty path after stripping)
+        (
+            "utimes          ./snapshot                      atime=2026-05-26T09:00:00-0400 mtime=2026-05-26T09:00:00-0400 ctime=2026-05-26T09:00:00-0400",
+            None,
+        ),
         # Unknown tokens → None
         ("at                      root .", None),
         ("subvol                  path subvol_name", None),
         ("clone                   path foo offset 0 len 4096 from bar clone_offset 0", None),
+        ("snapshot        ./snapshot                      uuid=abc transid=1 parent_uuid=def parent_transid=0", None),
         # Empty line → None
         ("", None),
         ("   ", None),
@@ -155,13 +189,16 @@ def _make_streaming_mock(lines: str, send_rc: int = 0, send_stderr: str = "", re
 
 
 def test_compute_diff_parses_output() -> None:
+    # Use real btrfs receive --dump format: no "path " keyword, key=value attrs,
+    # paths prefixed with "./snapshot/" (snapper's subvolume name).
     fake_stdout = (
-        "mkfile                  path new_file.txt\n"
-        "write                   path new_file.txt offset 0 len 10\n"
-        "chmod                   path new_file.txt mode 0644\n"
+        "snapshot        ./snapshot                      uuid=abc transid=1 parent_uuid=def parent_transid=0\n"
+        "mkfile          ./snapshot/new_file.txt\n"
+        "write           ./snapshot/new_file.txt         offset=0 len=10\n"
+        "chmod           ./snapshot/new_file.txt         mode=0644\n"
     )
     with patch(
-        "snapdiff.utils.subprocess.pipe_streaming",
+        "btrmap.utils.subprocess.pipe_streaming",
         side_effect=_make_streaming_mock(fake_stdout),
     ):
         records = compute_diff("/snap/base", "/snap/new")
@@ -177,7 +214,7 @@ def test_compute_diff_parses_output() -> None:
 
 def test_compute_diff_raises_diff_error_on_send_failure() -> None:
     with patch(
-        "snapdiff.utils.subprocess.pipe_streaming",
+        "btrmap.utils.subprocess.pipe_streaming",
         side_effect=_make_streaming_mock("", send_rc=1, send_stderr="some btrfs error"),
     ):
         with pytest.raises(DiffError, match="btrfs send failed"):
@@ -186,7 +223,7 @@ def test_compute_diff_raises_diff_error_on_send_failure() -> None:
 
 def test_compute_diff_raises_permission_error() -> None:
     with patch(
-        "snapdiff.utils.subprocess.pipe_streaming",
+        "btrmap.utils.subprocess.pipe_streaming",
         side_effect=_make_streaming_mock("", send_rc=1, send_stderr="ERROR: Operation not permitted"),
     ):
         with pytest.raises(PermissionError, match="root"):
@@ -195,7 +232,7 @@ def test_compute_diff_raises_permission_error() -> None:
 
 def test_compute_diff_raises_diff_error_on_receive_failure() -> None:
     with patch(
-        "snapdiff.utils.subprocess.pipe_streaming",
+        "btrmap.utils.subprocess.pipe_streaming",
         side_effect=_make_streaming_mock("", receive_rc=1),
     ):
         with pytest.raises(DiffError, match="btrfs receive"):

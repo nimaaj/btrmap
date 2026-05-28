@@ -1,11 +1,20 @@
-# src/snapdiff/model/enrichment.py
+"""Populate ``size_bytes`` on each leaf of a :class:`~btrmap.model.diff_tree.DiffTree`.
+
+Each leaf is stat-ed in the appropriate snapshot mount:
+
+- CREATED / MODIFIED / PERMISSIONS / RENAMED (new path) → *new* snapshot mount
+- DELETED (and RENAMED old path, which becomes DELETED) → *base* snapshot mount
+
+``OSError`` failures (sockets, pipes, paths outside the mount) are silently ignored
+and leave ``size_bytes`` at 0 so a single inaccessible file cannot abort the whole diff.
+"""
 from __future__ import annotations
 
 import os
 from collections.abc import Callable
 
-from snapdiff.btrfs.diff import ChangeType
-from snapdiff.model.diff_tree import DiffNode, DiffTree
+from btrmap.btrfs.diff import ChangeType
+from btrmap.model.diff_tree import DiffNode, DiffTree
 
 
 def enrich(

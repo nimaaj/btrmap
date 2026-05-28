@@ -1,12 +1,17 @@
-# src/snapdiff/ui/tree_view.py
+"""Collapsible file-tree view of a snapshot diff, built on QAbstractItemModel.
+
+:class:`DiffTreeModel` stores DiffNode pointers directly inside QModelIndex via
+``internalPointer``.  :class:`DiffTreeView` wraps it with column resizing and
+a ``node_selected`` signal for cross-widget synchronisation.
+"""
 from __future__ import annotations
 
 from PyQt6.QtCore import QAbstractItemModel, QModelIndex, Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QHeaderView, QTreeView
 
-from snapdiff.btrfs.diff import ChangeType
-from snapdiff.model.diff_tree import DiffNode, DiffTree
+from btrmap.btrfs.diff import ChangeType
+from btrmap.model.diff_tree import DiffNode, DiffTree
 
 _CHANGE_COLORS: dict[ChangeType, QColor] = {
     ChangeType.CREATED: QColor("#4caf50"),
@@ -26,15 +31,21 @@ def _fmt_size(size: int) -> str:
 
 
 class DiffTreeModel(QAbstractItemModel):
+    """Qt item model that exposes a :class:`~btrmap.model.diff_tree.DiffTree`.
+
+    Node lookup is O(1): ``_parent_map`` and ``_row_map`` are built once at
+    construction and keyed by ``full_path``.  :py:meth:`index` stores the
+    ``DiffNode`` pointer in the ``QModelIndex`` so ``data()`` and ``parent()``
+    never need to re-traverse the tree.
+    """
+
     HEADERS = ["Name", "Change", "Size"]
 
     def __init__(self, tree: DiffTree, parent=None) -> None:
         super().__init__(parent)
         self._tree = tree
-        # Maps full_path → parent DiffNode (None for root's children)
-        self._parent_map: dict[str, DiffNode | None] = {}
-        # Maps full_path → row index within its parent
-        self._row_map: dict[str, int] = {}
+        self._parent_map: dict[str, DiffNode | None] = {}  # full_path → parent node
+        self._row_map: dict[str, int] = {}                  # full_path → row within parent
         self._build_maps(tree.root, None, 0)
 
     def _build_maps(self, node: DiffNode, parent: DiffNode | None, row: int) -> None:
@@ -50,7 +61,7 @@ class DiffTreeModel(QAbstractItemModel):
 
     # ── QAbstractItemModel interface ──────────────────────────────────────────
 
-    def index(self, row: int, col: int, parent: QModelIndex = QModelIndex()) -> QModelIndex:
+    def index(self, row: int, col: int, parent: QModelIndex = QModelIndex()) -> QModelIndex:  # noqa: B008
         parent_node = self._node(parent)
         children = list(parent_node.children.values())
         if 0 <= row < len(children):
@@ -67,10 +78,10 @@ class DiffTreeModel(QAbstractItemModel):
         row = self._row_map.get(parent_node.full_path, 0)
         return self.createIndex(row, 0, parent_node)
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
         return len(self._node(parent).children)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
         return 3
 
     def headerData(
@@ -113,12 +124,18 @@ class DiffTreeModel(QAbstractItemModel):
 
 
 class DiffTreeView(QTreeView):
+    """QTreeView pre-configured for diff trees with cross-widget selection sync."""
+
     node_selected = pyqtSignal(str)  # emits full_path
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr = self.header()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.setAlternatingRowColors(True)
+        self.setUniformRowHeights(True)  # faster paint for large trees
 
     def set_tree(self, tree: DiffTree) -> None:
         model = DiffTreeModel(tree, self)

@@ -1,10 +1,10 @@
-# src/snapdiff/btrfs/subvolumes.py
+"""Enumerate read-only btrfs subvolumes via ``btrfs subvolume list``."""
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 
-from snapdiff.utils import subprocess as sp
+from btrmap.utils import subprocess as sp
 
 # btrfs subvolume list -rp output format (-p adds "parent <id>" field):
 # ID <id> gen <gen> parent <id> top level <lvl> path <path>
@@ -15,15 +15,17 @@ _SUBVOL_RE = re.compile(
 
 @dataclass(frozen=True)
 class Subvolume:
+    """Metadata for a single btrfs subvolume returned by ``btrfs subvolume list``."""
+
     id: int
-    path: str  # path relative to filesystem root
+    path: str          # path relative to the filesystem root passed to list_subvolumes
     mount_point: str | None
     is_readonly: bool
     generation: int
 
 
 class SubvolumeListError(Exception):
-    pass
+    """Raised when ``btrfs subvolume list`` exits with a non-zero status."""
 
 
 def list_subvolumes(fs_path: str) -> list[Subvolume]:

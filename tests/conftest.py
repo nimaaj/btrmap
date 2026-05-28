@@ -1,2 +1,1 @@
-# tests/conftest.py
-# Shared fixtures added here as the test suite grows.
+"""Shared pytest fixtures (populated as the test suite grows)."""
